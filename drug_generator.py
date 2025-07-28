@@ -17,9 +17,9 @@ from selfies_autoencoder import SelfiesEncoder, SelfiesDecoder
 from stable_baselines3 import PPO, TD3, A2C
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.noise import NormalActionNoise
-from train_condition_model import ConditionModelLinear
+from train_condition_model import ConditionModelLinear, ConditionModel
 from train_gctx import GenePertModel
-from utils import smiles_to_embedding, embedding_to_smiles, get_minmax, get_zscores
+from utils import smiles_to_embedding, embedding_to_smiles, get_minmax, get_zscores, get_zscore_minmax
 from scipy.stats import pearsonr
 
 def moving_average(data, window_size=50):
@@ -28,9 +28,10 @@ def moving_average(data, window_size=50):
 def process_gene_csv(path, desired_genes):
     df = pd.read_csv(path, index_col=0)
     df.index = [index.split(".")[0] for index in df.index]
+    df = np.log2(df + 1)
+    df = df.apply(get_zscores, axis=0)
+    df = df.apply(get_zscore_minmax, axis=0)
     df = df.loc[desired_genes, :]
-    df = df.apply(get_zscores)
-    df = df.apply(get_minmax)
     df = df.transpose()
     gene_expr = df.to_numpy().flatten()
     return gene_expr
@@ -107,14 +108,18 @@ class DrugGenEnv(gym.Env):
             
             new_expr = self.gctx_model(current_obs_expr_tensor, selfies_embedding_tensor, dosage_conc_tensor, dosage_time_tensor)
 
-        condition_probs = self.condition_model(new_expr)[0].detach().cpu().numpy()
-        input(current_obs_expr_tensor)
-        input(new_expr)
-        input(condition_probs)
-        healthiness_score = (1 - np.mean(condition_probs))
+        original_probs = self.condition_model(current_obs_expr_tensor)[0].detach().cpu().numpy()
+        new_probs = self.condition_model(new_expr)[0].detach().cpu().numpy()
+        # input(current_obs_expr_tensor)
+        # input(new_expr)
+        # input(condition_probs)
+        healthiness = -(np.mean(new_probs) - np.mean(original_probs))
         unnorm_dosage_conc = (np.e ** dosage_conc) - 1
         unnorm_dosage_time = (np.e ** dosage_time) - 1
-        reward = healthiness_score + 0.1 * qed_score
+        if qed_score < 0.4 or healthiness < 0:
+            reward = 0
+        else:
+            reward = healthiness
         self.reward_list.append(reward)
 
         if reward > self.max_reward:
@@ -122,7 +127,7 @@ class DrugGenEnv(gym.Env):
             print(f"SMILES: {smiles}")
             print(f"Dosage Concentration: {unnorm_dosage_conc} uM")
             print(f"Dosage Time: {unnorm_dosage_time} h")
-            print(f"Healthiness: {healthiness_score}")
+            print(f"Healthiness Improvement: {healthiness}")
             print(f"Drug QED Score: {qed_score}")
             print(f"Reward: {reward}")
             self.max_reward = reward
@@ -148,10 +153,10 @@ class DrugGenEnv(gym.Env):
     
 gctx_savefile = "Models/gctx.pth"
 ae_savefile = "Models/selfies_autoencoder.pth"
-condition_savefile = "Models/linear_model.pth"
+condition_savefile = "Models/condition_model_linear.pth"
 
 condition_dirs = ["Conditions/Breast_Cancer", "Conditions/Myelofibrosis", "Conditions/Lupus"]
-policy_savefile = "Models/drug_generator"
+policy_savefile = "Models/drug_generator_ppo"
 
 env = DrugGenEnv(gctx_savefile, ae_savefile, condition_savefile, condition_dirs)
 noise = NormalActionNoise(mean=np.zeros(env.action_space.shape[-1]), sigma=0.1 * np.ones(env.action_space.shape[-1]))
@@ -160,9 +165,9 @@ policy_kwargs = dict(
     activation_fn=torch.nn.GELU
 )
 
-# model = PPO("MlpPolicy", env, n_steps=256, batch_size=64, ent_coef=0.01, learning_rate=1e-4, policy_kwargs=policy_kwargs)
+model = PPO("MlpPolicy", env, n_steps=256, batch_size=64, ent_coef=0.03, vf_coef=0.3, learning_rate=1e-4, policy_kwargs=policy_kwargs)
 # model = TD3("MlpPolicy", env, buffer_size=50000, action_noise=noise, policy_kwargs=policy_kwargs, learning_rate=1e-4, train_freq=128, gradient_steps=32)
-model = A2C("MlpPolicy", env, ent_coef=0.01, policy_kwargs=policy_kwargs)
+# model = A2C("MlpPolicy", env, ent_coef=0.05, vf_coef=0.3, max_grad_norm=0.3, policy_kwargs=policy_kwargs)
 if os.path.exists(f"{policy_savefile}.zip"):
     model.set_parameters(policy_savefile)
 

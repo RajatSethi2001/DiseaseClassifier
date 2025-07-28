@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from torch.utils.data import Dataset, DataLoader, Subset
-from utils import set_seeds, get_minmax, get_zscores
+from utils import set_seeds, get_minmax, get_zscores, get_zscore_minmax
 
 class ConditionDataset(Dataset):
     def __init__(self, df: pd.DataFrame, genes, conditions):
@@ -36,7 +36,7 @@ class ConditionModel(nn.Module):
     
         self.activation = nn.GELU()
         self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(0.4)
+        self.dropout = nn.Dropout(0.1)
     
     def forward(self, x):
         x = self.dropout(self.activation(self.input_layer(x)))
@@ -65,8 +65,8 @@ def main():
     condition_parent_dir = "Conditions"
     directory_list = ["Lupus", "Podoconiosis", "Primary_Sclerosing_Cholangitis", "Ulcerative_Colitis", "Shingles", "Sepsis", "Scleroderma", "MRSA_Bacteremia", "Crohns_Disease", "Acute_Pancreatitis", "Aneurysm", "Tuberculosis", "Acute_Myeloid_Leukemia", "Endocarditis", "Schistosomiasis", "Leprosy", "Amyotrophic_Lateral_Sclerosis", "Chronic_Myeloid_Leukemia", "Dengue", "Alzheimer", "Restless_Legs_Syndrome", "Coronary_Artery_Disease", "COPD", "Breast_Cancer", "Crimean_Congo_Hemorrhagic_Fever", "Hypertension,Drug_Abuse", "Hypertension", "COVID19", "Depression", "PTSD", "HIV", "HIV,Tuberculosis", "Malaria", "Hidradenitis_Supparativa", "SFTS", "Cystic_Fibrosis", "Chikungunya", "Rheumatoid_Arthritis", "Polycystic_Kidney_Disease", "Parkinson", "Myelofibrosis"]
     savefile = "Models/condition_model.pth"
-    train_test_split = 0.1
-    batch_size = 64
+    train_test_split = 0.2
+    batch_size = 128
     genes = pd.read_csv("Data/important_genes.csv", header=None)[1].to_list()
 
     condition_df = pd.DataFrame()
@@ -81,9 +81,10 @@ def main():
             csv_path = f"{path}/{filename}"
             df = pd.read_csv(csv_path, index_col=0)
             df.index = [index.split(".")[0] for index in df.index]
+            df = np.log2(df + 1)
+            df = df.apply(get_zscores, axis=0)
+            df = df.apply(get_zscore_minmax, axis=0)
             df = df.loc[genes, :]
-            df = df.apply(get_zscores)
-            df = df.apply(get_minmax)
             df = df.transpose()
             dir_conditions = directory.split(",")
             for condition in dir_conditions:
@@ -110,8 +111,8 @@ def main():
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    model = ConditionModel(len(genes), len(conditions), hidden_neurons=1024)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    model = ConditionModel(len(genes), len(conditions), hidden_neurons=32)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     if os.path.exists(savefile):
         checkpoint = torch.load(savefile, weights_only=True)
         model.load_state_dict(checkpoint["model_state_dict"])

@@ -35,10 +35,15 @@ def clean_dose_unit(raw):
             return raw.decode('utf-8', errors='ignore')  # fallback
     return raw
 
-def get_minmax(vector):
-    lo = np.min(vector)
-    hi = np.max(vector)
+def get_minmax(vector, lo_perc=1, high_perc=99):
+    lo = np.percentile(vector, lo_perc)
+    hi = np.percentile(vector, high_perc)
     return np.clip((vector - lo) / (hi - lo), 0, 1)
+
+def get_zscore_minmax(vector):
+    lo = -3
+    hi = 3
+    return (np.clip(vector, lo, hi) - lo) / (hi - lo)
 
 def get_zscores(vector):
     return (vector - np.mean(vector)) / np.std(vector)

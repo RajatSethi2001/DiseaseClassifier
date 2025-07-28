@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from selfies_autoencoder import SelfiesEncoder, SelfiesDecoder
 from torch.utils.data import Dataset, DataLoader, Subset
-from utils import get_minmax, get_zscores, clean_dose_unit, smiles_to_embedding, set_seeds
+from utils import get_zscore_minmax, get_zscores, clean_dose_unit, smiles_to_embedding, set_seeds
 """
 /0
 /0/DATA
@@ -95,10 +95,10 @@ class GenePertDataset(Dataset):
                 break
             for ctl_idx in gene_data["ctl_idx"]:
                 ctl_expr_total = np.array(self.gctx_fp["0/DATA/0/matrix"][ctl_idx, :])[self.gene_idx]
-                ctl_expr = torch.tensor(get_minmax(get_zscores(ctl_expr_total)), dtype=torch.float32)
+                ctl_expr = torch.tensor(get_zscore_minmax(ctl_expr_total), dtype=torch.float32)
                 for trt_idx in gene_data["trt_idx"]:
                     trt_expr_total = np.array(self.gctx_fp["0/DATA/0/matrix"][trt_idx, :])[self.gene_idx]
-                    trt_expr = torch.tensor(get_minmax(get_zscores(trt_expr_total)), dtype=torch.float32)
+                    trt_expr = torch.tensor(get_zscore_minmax(trt_expr_total), dtype=torch.float32)
                     dose = torch.tensor([np.log1p(self.pert_dose[trt_idx])], dtype=torch.float32)
                     time = torch.tensor([np.log1p(self.pert_time[trt_idx])], dtype=torch.float32)
                     smiles = self.smiles_lookup[self.pert_id[trt_idx]]
@@ -171,7 +171,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    criterion = nn.SmoothL1Loss()
+    criterion = nn.MSELoss()
     model = GenePertModel(len(dataset.get_gene_symbols()), 1500)
     optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
 
@@ -211,9 +211,6 @@ def main():
         batch = 0
         for ctl_expr, trt_expr, smiles_embedding, dose, time in test_loader:
             output = model(ctl_expr, smiles_embedding, dose, time)
-            input(ctl_expr)
-            input(trt_expr)
-            input(output)
             loss = criterion(output, trt_expr)
             test_loss += loss.item()
 
