@@ -18,6 +18,7 @@ from stable_baselines3 import PPO, TD3, A2C
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.noise import NormalActionNoise
 from train_condition_model import ConditionModelLinear, ConditionModel
+from train_health_model import HealthModel, HealthModelLinear
 from train_gctx import GenePertModel
 from utils import smiles_to_embedding, embedding_to_smiles, get_minmax, get_zscores, get_zscore_minmax
 from scipy.stats import pearsonr
@@ -46,7 +47,7 @@ def validate_molecule(smiles):
         return -0.1
 
 class DrugGenEnv(gym.Env):
-    def __init__(self, gctx_savefile, autoencoder_savefile, condition_savefile, condition_dirs, max_selfies_len=50):
+    def __init__(self, gctx_savefile, autoencoder_savefile, health_savefile, condition_dirs, max_selfies_len=50):
         super().__init__()
         with open("Data/selfies_alphabet.txt", "r") as f:
             self.selfies_alphabet = f.read().splitlines()
@@ -62,11 +63,11 @@ class DrugGenEnv(gym.Env):
         self.decoder.load_state_dict(ae_checkpoint["decoder_model"])
         self.decoder.eval()
 
-        condition_checkpoint = torch.load(condition_savefile)
-        conditions = condition_checkpoint["conditions"]
-        self.condition_model = ConditionModelLinear(len(self.genes), len(conditions))
-        self.condition_model.load_state_dict(condition_checkpoint["model_state_dict"])
-        self.condition_model.eval()
+        health_checkpoint = torch.load(health_savefile)
+        # conditions = condition_checkpoint["conditions"]
+        self.health_model = HealthModel(len(self.genes))
+        self.health_model.load_state_dict(health_checkpoint["model_state_dict"])
+        self.health_model.eval()
 
         self.max_selfies_len = max_selfies_len
         self.reward_list = []
@@ -108,18 +109,16 @@ class DrugGenEnv(gym.Env):
             
             new_expr = self.gctx_model(current_obs_expr_tensor, selfies_embedding_tensor, dosage_conc_tensor, dosage_time_tensor)
 
-        original_probs = self.condition_model(current_obs_expr_tensor)[0].detach().cpu().numpy()
-        new_probs = self.condition_model(new_expr)[0].detach().cpu().numpy()
-        # input(current_obs_expr_tensor)
-        # input(new_expr)
-        # input(condition_probs)
-        healthiness = -(np.mean(new_probs) - np.mean(original_probs))
+        original_health = self.health_model(current_obs_expr_tensor)[0].item()
+        new_health = self.health_model(new_expr)[0].item()
+
+        healthiness = new_health - original_health
         unnorm_dosage_conc = (np.e ** dosage_conc) - 1
         unnorm_dosage_time = (np.e ** dosage_time) - 1
         if qed_score < 0.4 or healthiness < 0:
             reward = 0
         else:
-            reward = healthiness
+            reward = healthiness + 0.01 * qed_score
         self.reward_list.append(reward)
 
         if reward > self.max_reward:
@@ -150,30 +149,31 @@ class DrugGenEnv(gym.Env):
 
             plt.pause(0.01)
         return self.current_obs_expr, {}
-    
-gctx_savefile = "Models/gctx.pth"
-ae_savefile = "Models/selfies_autoencoder.pth"
-condition_savefile = "Models/condition_model_linear.pth"
 
-condition_dirs = ["Conditions/Breast_Cancer", "Conditions/Myelofibrosis", "Conditions/Lupus"]
-policy_savefile = "Models/drug_generator_ppo"
+def main():    
+    gctx_savefile = "Models/gctx.pth"
+    ae_savefile = "Models/selfies_autoencoder.pth"
+    condition_savefile = "Models/health_model.pth"
 
-env = DrugGenEnv(gctx_savefile, ae_savefile, condition_savefile, condition_dirs)
-noise = NormalActionNoise(mean=np.zeros(env.action_space.shape[-1]), sigma=0.1 * np.ones(env.action_space.shape[-1]))
-policy_kwargs = dict(
-    net_arch=[1500, 1500],
-    activation_fn=torch.nn.GELU
-)
+    condition_dirs = ["Conditions/Unhealthy"]
+    policy_savefile = "Models/drug_generator_a2c"
 
-model = PPO("MlpPolicy", env, n_steps=256, batch_size=64, ent_coef=0.03, vf_coef=0.3, learning_rate=1e-4, policy_kwargs=policy_kwargs)
-# model = TD3("MlpPolicy", env, buffer_size=50000, action_noise=noise, policy_kwargs=policy_kwargs, learning_rate=1e-4, train_freq=128, gradient_steps=32)
-# model = A2C("MlpPolicy", env, ent_coef=0.05, vf_coef=0.3, max_grad_norm=0.3, policy_kwargs=policy_kwargs)
-if os.path.exists(f"{policy_savefile}.zip"):
-    model.set_parameters(policy_savefile)
+    env = DrugGenEnv(gctx_savefile, ae_savefile, condition_savefile, condition_dirs)
+    policy_kwargs = dict(
+        net_arch=[600, 600, 600],
+        activation_fn=torch.nn.ReLU
+    )
 
-for epoch in range(100):
-    model.learn(total_timesteps=5000, progress_bar=True)
-    model.save(policy_savefile)
+    model = A2C("MlpPolicy", env, n_steps=150, gamma=0.97, gae_lambda=0.91, ent_coef=1e-5, policy_kwargs=policy_kwargs)
+    if os.path.exists(f"{policy_savefile}.zip"):
+        model.set_parameters(policy_savefile)
 
-plt.ioff()
-plt.close()
+    for epoch in range(100):
+        model.learn(total_timesteps=5000, progress_bar=True)
+        model.save(policy_savefile)
+
+    plt.ioff()
+    plt.close()
+
+if __name__=="__main__":
+    main()

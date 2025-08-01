@@ -40,6 +40,7 @@ from utils import get_zscore_minmax, get_zscores, clean_dose_unit, smiles_to_emb
 class GenePertDataset(Dataset):
     def __init__(self, gctx_file, compound_file, data_limit=100000, max_selfies_len=50):
         self.gctx_fp = h5py.File(gctx_file, "r")
+        self.cell_ids = [s.decode('utf-8') for s in self.gctx_fp["0/META/COL/cell_id"][:data_limit]]
         self.distil_ids = [s.decode('utf-8') for s in self.gctx_fp["0/META/COL/distil_id"][:data_limit]]
         self.pert_dose = [float(s.decode('utf-8').split("|")[0]) for s in self.gctx_fp["0/META/COL/pert_dose"][:data_limit]]
         self.pert_dose_units = [clean_dose_unit(s) for s in self.gctx_fp["0/META/COL/pert_dose_unit"][:data_limit]]
@@ -59,7 +60,11 @@ class GenePertDataset(Dataset):
             self.selfies_alphabet = f.read().splitlines()
 
         data_map = {}
+        valid_cell_lines = {"THP1", "U937", "HL60", "JURKAT", "NOMO1", "CD34", "WSUDLCL2", "U266", "NKDBA", "PL21"}
         for idx in range(data_limit):
+            # cell_id = self.cell_ids[idx]
+            # if cell_id not in valid_cell_lines:
+            #     continue
             distil_id = self.distil_ids[idx].split(":")[0]
             if distil_id not in data_map:
                 data_map[distil_id] = {"ctl_idx": [], "trt_idx": []}
@@ -90,7 +95,9 @@ class GenePertDataset(Dataset):
         self.decoder.eval()
 
         self.gctx_data = []
-        for distil_id, gene_data in data_map.items():
+        data_map_items = list(data_map.items())
+        random.shuffle(data_map_items)
+        for distil_id, gene_data in data_map_items:
             if len(self.gctx_data) > 10000:
                 break
             for ctl_idx in gene_data["ctl_idx"]:
@@ -105,8 +112,9 @@ class GenePertDataset(Dataset):
                     smiles_embedding = torch.tensor(smiles_to_embedding(smiles, self.selfies_alphabet, self.encoder), dtype=torch.float32)
 
                     self.gctx_data.append((ctl_expr, trt_expr, smiles_embedding, dose, time))
-                print(f"Genes Processed = {len(self.gctx_data)}")
-
+                print(f"Samples Processed = {len(self.gctx_data)}")
+        
+        del self.cell_ids
         del self.distil_ids
         del self.pert_dose
         del self.pert_dose_units
@@ -167,7 +175,7 @@ def main():
     train_dataset = Subset(dataset, train_indices)
     test_dataset = Subset(dataset, test_indices)
 
-    batch_size = 128
+    batch_size = 32
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 

@@ -20,11 +20,11 @@ class HealthDataset(Dataset):
 
     def __getitem__(self, idx):
         gene_data = torch.tensor(self.df.iloc[idx, :][self.genes].values, dtype=torch.float32)
-        health_data = torch.tensor(self.df.iloc[idx, :]["Healthy"].values, dtype=torch.float32)
+        health_data = torch.tensor(self.df.iloc[idx, :]["Healthy"].flatten(), dtype=torch.float32)
         return gene_data, health_data
 
 class HealthModel(nn.Module):
-    def __init__(self, num_genes, hidden_neurons=128):
+    def __init__(self, num_genes, hidden_neurons=64):
         super().__init__()
         self.input_layer = nn.Linear(num_genes, hidden_neurons)
         self.fc1 = nn.Linear(hidden_neurons, hidden_neurons)
@@ -33,7 +33,7 @@ class HealthModel(nn.Module):
         self.bn2 = nn.BatchNorm1d(hidden_neurons)
         self.output_layer = nn.Linear(hidden_neurons, 1)
     
-        self.activation = nn.GELU()
+        self.activation = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
         self.dropout = nn.Dropout(0.1)
     
@@ -63,7 +63,7 @@ def main():
     set_seeds(111)
     healthy_dir = "Conditions/Healthy"
     unhealthy_dir = "Conditions/Unhealthy"
-    savefile = "Models/health_model_linear.pth"
+    savefile = "Models/health_model.pth"
     train_test_split = 0.2
     batch_size = 8
     genes = pd.read_csv("Data/important_genes.csv", header=None)[1].to_list()
@@ -113,14 +113,14 @@ def main():
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    model = HealthModelLinear(len(genes))
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    model = HealthModel(len(genes))
+    optimizer = optim.AdamW(model.parameters(), lr=1e-5, weight_decay=1e-6)
     if os.path.exists(savefile):
         checkpoint = torch.load(savefile, weights_only=True)
         model.load_state_dict(checkpoint["model_state_dict"])
 
     criterion = nn.BCELoss()
-    for epoch in range(500):
+    for epoch in range(1000):
         print(f"Epoch: {epoch}")
         train_metrics = {"tp": np.float32(0), "tn": np.float32(0), "fp": np.float32(0), "fn": np.float32(0)}
         train_loss = 0
@@ -132,7 +132,7 @@ def main():
             loss.backward()
             train_loss += loss.item()
             optimizer.step()
-
+            
             for batch_idx in range(len(outputs)):
                 output_batch = outputs[batch_idx]
                 label_batch = labels[batch_idx]
@@ -151,25 +151,26 @@ def main():
                 
                 elif output_choice == 0 and label_choice == 1:
                     train_metrics["fn"] += 1
-    
-        tp = train_metrics["tp"]
-        tn = train_metrics["tn"]
-        fp = train_metrics["fp"]
-        fn = train_metrics["fn"]
-        with np.errstate(invalid='ignore', divide='ignore'):
-            precision = tp / (tp + fp)
-            recall = tp / (tp + fn)
-            f_score = 2 * precision * recall / (precision + recall)
-            print(f"Train Metrics: Precision = {round(precision, 3)}, Recall = {round(recall, 3)}, F-Score = {round(f_score, 3)}")
         
-        train_loss /= len(train_dataset)
-        print(f"Train Loss = {train_loss}")    
-        print("Saving Model")
-        print()
-        torch.save({
-            "model_state_dict": model.state_dict(),
-            "genes": genes,
-        }, savefile)
+        if epoch % 20 == 0:
+            tp = train_metrics["tp"]
+            tn = train_metrics["tn"]
+            fp = train_metrics["fp"]
+            fn = train_metrics["fn"]
+            with np.errstate(invalid='ignore', divide='ignore'):
+                precision = tp / (tp + fp)
+                recall = tp / (tp + fn)
+                f_score = 2 * precision * recall / (precision + recall)
+                print(f"Train Metrics: Precision = {round(precision, 3)}, Recall = {round(recall, 3)}, F-Score = {round(f_score, 3)}")
+        
+            train_loss /= len(train_dataset)
+            print(f"Train Loss = {train_loss}")    
+            print("Saving Model")
+            print()
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "genes": genes,
+            }, savefile)
 
         model.eval()
         test_metrics = {"tp": np.float32(0), "tn": np.float32(0), "fp": np.float32(0), "fn": np.float32(0)}
@@ -198,19 +199,20 @@ def main():
                 elif output_choice == 0 and label_choice == 1:
                     test_metrics["fn"] += 1
         
-        tp = test_metrics["tp"]
-        tn = test_metrics["tn"]
-        fp = test_metrics["fp"]
-        fn = test_metrics["fn"]
-        with np.errstate(invalid='ignore', divide='ignore'):
-            precision = tp / (tp + fp)
-            recall = tp / (tp + fn)
-            f_score = 2 * precision * recall / (precision + recall)
-            print(f"Test Metrics: Precision = {round(precision, 3)}, Recall = {round(recall, 3)}, F-Score = {round(f_score, 3)}")
-        
-        test_loss /= len(test_dataset)
-        print(f"Test Loss = {test_loss}")
-        print()
+        if epoch % 20 == 0:
+            tp = test_metrics["tp"]
+            tn = test_metrics["tn"]
+            fp = test_metrics["fp"]
+            fn = test_metrics["fn"]
+            with np.errstate(invalid='ignore', divide='ignore'):
+                precision = tp / (tp + fp)
+                recall = tp / (tp + fn)
+                f_score = 2 * precision * recall / (precision + recall)
+                print(f"Test Metrics: Precision = {round(precision, 3)}, Recall = {round(recall, 3)}, F-Score = {round(f_score, 3)}")
+            
+            test_loss /= len(test_dataset)
+            print(f"Test Loss = {test_loss}")
+            print()
 
 if __name__=="__main__":
     main()
