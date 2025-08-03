@@ -29,14 +29,14 @@ class ConditionModel(nn.Module):
         super().__init__()
         self.input_layer = nn.Linear(num_genes, hidden_neurons)
         self.fc1 = nn.Linear(hidden_neurons, hidden_neurons)
-        self.bn1 = nn.BatchNorm1d(hidden_neurons)
+        self.bn1 = nn.LayerNorm(hidden_neurons)
         self.fc2 = nn.Linear(hidden_neurons, hidden_neurons)
-        self.bn2 = nn.BatchNorm1d(hidden_neurons)
+        self.bn2 = nn.LayerNorm(hidden_neurons)
         self.output_layer = nn.Linear(hidden_neurons, num_conditions)
     
         self.activation = nn.GELU()
         self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(0.2)
     
     def forward(self, x):
         x = self.dropout(self.activation(self.input_layer(x)))
@@ -61,12 +61,12 @@ class ConditionModelLinear(nn.Module):
         return self.network.weight.data
 
 def main():
-    set_seeds(11)
+    set_seeds(111)
     condition_parent_dir = "Conditions"
-    directory_list = ["Lupus", "Podoconiosis", "Primary_Sclerosing_Cholangitis", "Ulcerative_Colitis", "Shingles", "Sepsis", "Scleroderma", "MRSA_Bacteremia", "Crohns_Disease", "Acute_Pancreatitis", "Aneurysm", "Tuberculosis", "Acute_Myeloid_Leukemia", "Endocarditis", "Schistosomiasis", "Leprosy", "Amyotrophic_Lateral_Sclerosis", "Chronic_Myeloid_Leukemia", "Dengue", "Alzheimer", "Restless_Legs_Syndrome", "Coronary_Artery_Disease", "COPD", "Breast_Cancer", "Crimean_Congo_Hemorrhagic_Fever", "Hypertension,Drug_Abuse", "Hypertension", "COVID19", "Depression", "PTSD", "HIV", "HIV,Tuberculosis", "Malaria", "Hidradenitis_Supparativa", "SFTS", "Cystic_Fibrosis", "Chikungunya", "Rheumatoid_Arthritis", "Polycystic_Kidney_Disease", "Parkinson", "Myelofibrosis"]
+    directory_list = ["Lupus", "Podoconiosis", "Primary_Sclerosing_Cholangitis", "Ulcerative_Colitis", "Shingles", "Sepsis", "Scleroderma", "MRSA_Bacteremia", "Crohns_Disease", "Acute_Pancreatitis", "Aneurysm", "Tuberculosis", "Acute_Myeloid_Leukemia", "Endocarditis", "Schistosomiasis", "Leprosy", "Amyotrophic_Lateral_Sclerosis", "Chronic_Myeloid_Leukemia", "Dengue", "Alzheimer", "Coronary_Artery_Disease", "COPD", "Breast_Cancer", "Crimean_Congo_Hemorrhagic_Fever", "Hypertension,Drug_Abuse", "Hypertension", "COVID19", "Depression", "PTSD", "HIV", "HIV,Tuberculosis", "Malaria", "Hidradenitis_Supparativa", "SFTS", "Cystic_Fibrosis", "Chikungunya", "Rheumatoid_Arthritis", "Polycystic_Kidney_Disease", "Parkinson", "Myelofibrosis"]
     savefile = "Models/condition_model.pth"
     train_test_split = 0.2
-    batch_size = 128
+    batch_size = 64
     genes = pd.read_csv("Data/important_genes.csv", header=None)[1].to_list()
 
     condition_df = pd.DataFrame()
@@ -111,8 +111,8 @@ def main():
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
-    model = ConditionModel(len(genes), len(conditions), hidden_neurons=32)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    model = ConditionModel(len(genes), len(conditions), hidden_neurons=256)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     if os.path.exists(savefile):
         checkpoint = torch.load(savefile, weights_only=True)
         model.load_state_dict(checkpoint["model_state_dict"])

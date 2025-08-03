@@ -332,7 +332,7 @@ class GenePertDataset(Dataset):
         data_map_items = list(valid_conditions.items())
         random.shuffle(data_map_items)
         for condition_id, gene_data in data_map_items:
-            if len(self.gctx_data) > 3000:
+            if len(self.gctx_data) > 5000:
                 break
 
             ctl_exprs = []

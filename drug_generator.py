@@ -48,7 +48,7 @@ def validate_molecule(smiles):
         return 0
 
 class DrugGenEnv(gym.Env):
-    def __init__(self, gctx_savefile, autoencoder_savefile, health_savefile, condition_dirs, max_selfies_len=50):
+    def __init__(self, gctx_savefile, autoencoder_savefile, condition_savefile, condition_dirs, max_selfies_len=50):
         super().__init__()
         with open("Data/selfies_alphabet.txt", "r") as f:
             self.selfies_alphabet = f.read().splitlines()
@@ -74,11 +74,11 @@ class DrugGenEnv(gym.Env):
         self.decoder.load_state_dict(ae_checkpoint["decoder_model"])
         self.decoder.eval()
 
-        health_checkpoint = torch.load(health_savefile)
-        # conditions = condition_checkpoint["conditions"]
-        self.health_model = HealthModel(len(self.genes))
-        self.health_model.load_state_dict(health_checkpoint["model_state_dict"])
-        self.health_model.eval()
+        condition_checkpoint = torch.load(condition_savefile)
+        conditions = condition_checkpoint["conditions"]
+        self.condition_model = ConditionModel(len(self.genes), len(conditions), 256)
+        self.condition_model.load_state_dict(condition_checkpoint["model_state_dict"])
+        self.condition_model.eval()
 
         self.max_selfies_len = max_selfies_len
         self.reward_list = []
@@ -120,8 +120,8 @@ class DrugGenEnv(gym.Env):
             
             new_expr = self.gctx_model(current_obs_expr_tensor, selfies_embedding_tensor, dosage_conc_tensor, dosage_time_tensor)
 
-        original_health = self.health_model(current_obs_expr_tensor)[0].item()
-        new_health = self.health_model(new_expr)[0].item()
+        original_health = (1 - np.mean(self.condition_model(current_obs_expr_tensor)[0].detach().cpu().numpy()))
+        new_health = (1 - np.mean(self.condition_model(new_expr)[0].detach().cpu().numpy()))
 
         healthiness = new_health - original_health
         unnorm_dosage_conc = (np.e ** dosage_conc) - 1
@@ -164,7 +164,7 @@ class DrugGenEnv(gym.Env):
 def main():    
     gctx_savefile = "Models/gctx.pth"
     ae_savefile = "Models/selfies_autoencoder.pth"
-    condition_savefile = "Models/health_model.pth"
+    condition_savefile = "Models/condition_model.pth"
 
     condition_dirs = ["Conditions/Unhealthy"]
     policy_savefile = "Models/drug_generator"
