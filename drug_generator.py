@@ -8,6 +8,7 @@ import random
 import selfies as sf
 import time
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from gymnasium import spaces
 from rdkit import Chem
@@ -44,7 +45,7 @@ def validate_molecule(smiles):
         qed_score = QED.qed(mol)
         return qed_score
     except:
-        return -0.1
+        return 0
 
 class DrugGenEnv(gym.Env):
     def __init__(self, gctx_savefile, autoencoder_savefile, health_savefile, condition_dirs, max_selfies_len=50):
@@ -54,12 +55,22 @@ class DrugGenEnv(gym.Env):
         self.genes = pd.read_csv("Data/important_genes.csv", header=None)[1].to_list()
 
         gctx_checkpoint = torch.load(gctx_savefile, weights_only=False)
-        self.gctx_model = GenePertModel(len(self.genes), 1500, hidden_size=2000)
+        self.gctx_model = GenePertModel(len(self.genes), 1200, 1200, dropout_prob=0.5)
         self.gctx_model.load_state_dict(gctx_checkpoint["model_state_dict"])
         self.gctx_model.eval()
 
         ae_checkpoint = torch.load(autoencoder_savefile)
-        self.decoder = SelfiesDecoder(len(self.selfies_alphabet), hidden_size=1500)
+        dec_hidden_size = 1200
+        dec_dropout_prob = 0.0
+        dec_layers = 3
+        dec_activation = nn.GELU
+        self.decoder = SelfiesDecoder(len(self.selfies_alphabet),
+                                max_selfies_len=max_selfies_len,
+                                embedding_size=dec_hidden_size,
+                                hidden_size=dec_hidden_size,
+                                dropout_prob=dec_dropout_prob,
+                                num_layers=dec_layers,
+                                activation_fn=dec_activation)
         self.decoder.load_state_dict(ae_checkpoint["decoder_model"])
         self.decoder.eval()
 
@@ -90,7 +101,7 @@ class DrugGenEnv(gym.Env):
                 self.condition_expr[filename] = process_gene_csv(filename, self.genes)
         
         self.observation_space = spaces.Box(low=0, high=1, shape=(len(self.genes),), dtype=np.float32)
-        self.action_space = spaces.Box(low=0, high=1, shape=(1502,), dtype=np.float32)
+        self.action_space = spaces.Box(low=0, high=1, shape=(1202,), dtype=np.float32)
         self.max_reward = 0
 
     def step(self, action: np.ndarray):
@@ -115,10 +126,10 @@ class DrugGenEnv(gym.Env):
         healthiness = new_health - original_health
         unnorm_dosage_conc = (np.e ** dosage_conc) - 1
         unnorm_dosage_time = (np.e ** dosage_time) - 1
-        if qed_score < 0.4 or healthiness < 0:
+        if healthiness < 0 or qed_score < 0:
             reward = 0
         else:
-            reward = healthiness + 0.01 * qed_score
+            reward = healthiness * qed_score
         self.reward_list.append(reward)
 
         if reward > self.max_reward:
@@ -156,15 +167,15 @@ def main():
     condition_savefile = "Models/health_model.pth"
 
     condition_dirs = ["Conditions/Unhealthy"]
-    policy_savefile = "Models/drug_generator_a2c"
+    policy_savefile = "Models/drug_generator"
 
     env = DrugGenEnv(gctx_savefile, ae_savefile, condition_savefile, condition_dirs)
     policy_kwargs = dict(
-        net_arch=[600, 600, 600],
+        net_arch=[1200, 1200],
         activation_fn=torch.nn.ReLU
     )
 
-    model = A2C("MlpPolicy", env, n_steps=150, gamma=0.97, gae_lambda=0.91, ent_coef=1e-5, policy_kwargs=policy_kwargs)
+    model = PPO("MlpPolicy", env, n_steps=256, batch_size=64, learning_rate=1e-5, ent_coef=1e-4, vf_coef=0.3, max_grad_norm=0.3, policy_kwargs=policy_kwargs)
     if os.path.exists(f"{policy_savefile}.zip"):
         model.set_parameters(policy_savefile)
 

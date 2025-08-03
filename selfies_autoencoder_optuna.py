@@ -1,4 +1,5 @@
 import numpy as np
+import optuna
 import os
 import pandas as pd
 import random
@@ -21,7 +22,7 @@ class SelfiesEncoder(nn.Module):
         self.fc_layers = []
         for _ in range(num_layers):
             self.fc_layers.append(nn.Linear(hidden_size, hidden_size))
-            self.fc_layers.append(nn.LayerNorm(hidden_size))
+            self.fc_layers.append(nn.BatchNorm1d(hidden_size))
             self.fc_layers.append(activation_fn())
             self.fc_layers.append(nn.Dropout(dropout_prob))
         
@@ -47,7 +48,7 @@ class SelfiesDecoder(nn.Module):
         self.fc_layers = []
         for _ in range(num_layers):
             self.fc_layers.append(nn.Linear(hidden_size, hidden_size))
-            self.fc_layers.append(nn.LayerNorm(hidden_size))
+            self.fc_layers.append(nn.BatchNorm1d(hidden_size))
             self.fc_layers.append(activation_fn())
             self.fc_layers.append(nn.Dropout(dropout_prob))
         
@@ -85,32 +86,28 @@ class SelfiesDataset(Dataset):
     def __getitem__(self, index):
         return self.selfies_one_hot_list[index], self.smiles_list[index]
 
-def main():
+def train_selfies_ae(trial: optuna.trial.Trial):
     train_test_split = 0.2
     max_selfies_len = 50
     compound_file = "Data/compoundinfo_beta.txt"
-    save_dir = "Models"
+    
+    batch_size = trial.suggest_int("batch_size", 1, 256)
+    enc_hidden_size = trial.suggest_int("enc_hidden_size", 1, 2000)
+    enc_dropout_prob = trial.suggest_float("enc_dropout", 0, 1)
+    enc_layers = trial.suggest_int("enc_layers", 1, 4)
+    enc_activation = trial.suggest_categorical("enc_activation", [nn.Identity, nn.ReLU, nn.GELU, nn.Tanh])
+    enc_lr = trial.suggest_float("enc_lr", 1e-6, 1e-2, log=True)
+    enc_weight_decay = trial.suggest_float("enc_weight_decay", 1e-8, 1e-2, log=True)
 
-    batch_size = 128
+    dec_hidden_size = trial.suggest_int("dec_hidden_size", 1, 2000)
+    dec_dropout_prob = trial.suggest_float("dec_dropout", 0, 1)
+    dec_layers = trial.suggest_int("dec_layers", 1, 4)
+    dec_activation = trial.suggest_categorical("dec_activation", [nn.Identity, nn.ReLU, nn.GELU, nn.Tanh])
+    dec_lr = trial.suggest_float("dec_lr", 1e-6, 1e-2, log=True)
+    dec_weight_decay = trial.suggest_float("dec_weight_decay", 1e-8, 1e-2, log=True)
 
-    enc_hidden_size = 1200
-    enc_dropout_prob = 0.0
-    enc_layers = 3
-    enc_activation = nn.GELU
-    enc_lr = 1e-3
-    enc_weight_decay = 1e-3
-
-    dec_hidden_size = 1200
-    dec_dropout_prob = 0.0
-    dec_layers = 3
-    dec_activation = nn.GELU
-    dec_lr = 1e-3
-    dec_weight_decay = 1e-3
-
-    set_seeds()
     compound_df = pd.read_csv(compound_file, sep="\t")
     smiles_list = compound_df["canonical_smiles"].to_list()
-
     with open("Data/selfies_alphabet.txt", "r") as f:
         selfies_alphabet = f.read().splitlines()
     
@@ -138,7 +135,7 @@ def main():
     
     decoder = SelfiesDecoder(len(selfies_alphabet),
                              max_selfies_len=max_selfies_len,
-                             embedding_size=dec_hidden_size,
+                             embedding_size=enc_hidden_size,
                              hidden_size=dec_hidden_size,
                              dropout_prob=dec_dropout_prob,
                              num_layers=dec_layers,
@@ -147,19 +144,10 @@ def main():
     encoder_optim = optim.AdamW(encoder.parameters(), lr=enc_lr, weight_decay=enc_weight_decay)
     decoder_optim = optim.AdamW(decoder.parameters(), lr=dec_lr, weight_decay=dec_weight_decay)
 
-    if os.path.exists(f"{save_dir}/selfies_autoencoder.pth"):
-        checkpoint = torch.load(f"{save_dir}/selfies_autoencoder.pth")
-        encoder.load_state_dict(checkpoint["encoder_model"])
-        decoder.load_state_dict(checkpoint["decoder_model"])
-
-    encode_scheduler = ReduceLROnPlateau(encoder_optim, mode='min', factor=0.3, patience=3, threshold=1e-2)
-    decode_scheduler = ReduceLROnPlateau(decoder_optim, mode='min', factor=0.3, patience=3, threshold=1e-2)
-
-    for epoch in range(250):
+    for epoch in range(10):
         print(f"Epoch {epoch}")
         encoder.train()
         decoder.train()
-        train_loss = 0.0
         batch_idx = 0
         for selfies_one_hot, smiles in train_loader:
             encoder_optim.zero_grad()
@@ -169,27 +157,16 @@ def main():
             
             loss = criterion(selfies_decoding, selfies_one_hot)
             loss.backward()
-            train_loss += loss.item()
             torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)
             torch.nn.utils.clip_grad_norm_(decoder.parameters(), max_norm=1.0)
             encoder_optim.step()
             decoder_optim.step()
 
             batch_idx += 1
-            if batch_idx % 5 == 0:
-                print(f"Training Batch Loss = {loss.item()}")
-
-        print(f"Training Loss = {train_loss / (len(train_dataset) // batch_size)}")
-
-        print("Saving Encoder and Decoder")
-        checkpoint = {
-            "encoder_model": encoder.state_dict(),
-            "decoder_model": decoder.state_dict(),
-        }
-        torch.save(checkpoint, f"{save_dir}/selfies_autoencoder.pth")
         
         encoder.eval()
         decoder.eval()
+        batch_idx = 0
         test_loss = 0.0
         for selfies_one_hot, smiles in test_loader:
             selfies_encoding = encoder(selfies_one_hot)
@@ -199,6 +176,7 @@ def main():
             test_loss += loss.item()
 
             selfies_probs_np = selfies_decoding.detach().cpu().numpy()
+            batch_idx += 1
         
         correct_tokens = 0
         total_tokens = 0
@@ -226,16 +204,16 @@ def main():
                 print()
             except Exception as e:
                 print(f"Decoding failed for: {selfies_ae}, Error: {e}")
-            
-        print(f"SELFIES Accuracy = {correct_tokens / total_tokens}")
-        test_loss = test_loss / (len(test_dataset) // batch_size)
-        print(f"Testing Loss = {test_loss}")
-        encode_scheduler.step(test_loss)
-        decode_scheduler.step(test_loss)
 
-        encoder_lr = encoder_optim.param_groups[0]['lr']
-        decoder_lr = decoder_optim.param_groups[0]['lr']
-        print(f"Encoder LR = {encoder_lr}, Decoder LR = {decoder_lr}")
+        token_accuracy = correct_tokens / total_tokens
+        print(f"SELFIES Accuracy = {token_accuracy}")
+    
+    return token_accuracy
+
+def main():
+    study = optuna.create_study(direction='maximize')
+    study.optimize(train_selfies_ae, n_trials=50)
+    print("Best trial:", study.best_trial.params)
 
 if __name__=="__main__":
     main()
